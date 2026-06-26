@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Telemesure boursiere — RF / Memoire</title>
+<style>
+  :root{
+    --bg:#080B0F;--panel:#0E141B;--panel2:#121A22;--ink:#D7E2E0;
+    --dim:#6F8088;--dimmer:#46555C;--teal:#00E5C7;--line:rgba(120,160,170,0.14);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;padding:18px 14px 40px;max-width:1080px;margin:0 auto;}
+  .eyebrow{font-family:ui-monospace,monospace;font-size:11px;letter-spacing:.28em;
+    text-transform:uppercase;color:var(--teal);opacity:.85;}
+  h1{margin:6px 0 0;font-size:clamp(22px,5.2vw,32px);font-weight:650;letter-spacing:-.01em;line-height:1.05;}
+  .sub{color:var(--dim);font-size:13.5px;max-width:62ch;line-height:1.5;margin-top:6px}
+  .sub b{color:var(--ink);font-weight:600}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0 10px;}
+  .seg{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{background:transparent;border:0;color:var(--dim);font-family:ui-monospace,monospace;
+    font-size:12px;letter-spacing:.04em;padding:8px 12px;cursor:pointer;transition:.15s;}
+  .seg button.on{background:var(--panel2);color:var(--teal)}
+  .seg button:not(.on):hover{color:var(--ink)}
+  .refresh{margin-left:auto;background:var(--panel);border:1px solid var(--line);color:var(--dim);
+    font-family:ui-monospace,monospace;font-size:12px;padding:8px 12px;border-radius:10px;cursor:pointer;}
+  .refresh:hover{color:var(--teal);border-color:rgba(0,229,199,.4)}
+  .scope{position:relative;background:radial-gradient(120% 90% at 50% 0%, rgba(0,229,199,.04), transparent 60%),var(--panel);
+    border:1px solid var(--line);border-radius:14px;padding:10px 6px 6px;box-shadow:inset 0 0 60px rgba(0,0,0,.5);}
+  canvas{display:block;width:100%;height:auto;touch-action:pan-y}
+  .status{font-family:ui-monospace,monospace;font-size:11.5px;color:var(--dim);padding:8px 6px 2px;min-height:18px;}
+  .status .err{color:#FF7A8A}
+  .legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:6px 14px;margin-top:14px;}
+  .lg{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:9px;border:1px solid transparent;
+    cursor:pointer;transition:.12s;background:var(--panel);}
+  .lg:hover{border-color:var(--line)}
+  .lg.off{opacity:.32}
+  .swatch{width:11px;height:11px;border-radius:3px;flex:none;box-shadow:0 0 8px currentColor}
+  .lg .nm{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+  .lg .tk{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--dimmer);display:block;font-weight:400}
+  .lg .pct{font-family:ui-monospace,monospace;font-size:12.5px;font-weight:600;flex:none}
+  .up{color:#54E0A0}.down{color:#FF7A8A}.flat{color:var(--dim)}
+  .notes{margin-top:22px;border-top:1px solid var(--line);padding-top:14px;color:var(--dim);font-size:12.5px;line-height:1.6}
+  .notes b{color:var(--ink)}
+</style>
+</head>
+<body>
+  <span class="eyebrow">Performance relative · base 100</span>
+  <h1>RF / microondes &amp; memoire — 6 mois</h1>
+  <p class="sub">Chaque trace est ramenee a <b>100</b> a sa premiere seance de la fenetre : les valeurs en USD, EUR, JPY, KRW, CHF et TWD se comparent directement. <b>MACOM</b> et <b>Micron</b> en gras comme reperes. Donnees Yahoo Finance, mises a jour chaque jour ouvre par GitHub Actions.</p>
+
+  <div class="controls">
+    <div class="seg" id="groupSeg">
+      <button data-g="all" class="on">Tout</button>
+      <button data-g="rf">RF / microondes</button>
+      <button data-g="mem">Memoire</button>
+      <button data-g="gan">Fonderie GaN</button>
+    </div>
+    <button class="refresh" id="refreshBtn">&#8635; Recharger</button>
+  </div>
+
+  <div class="scope">
+    <canvas id="cv"></canvas>
+    <div class="status" id="status">Chargement de data.json...</div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <div class="notes">
+    <p><b>Lecture.</b> Wolfspeed (WOLF) sort d'un Chapter 11 en 2025 : sa trace reflete une recapitalisation, pas seulement le marche RF. Kioxia (285A.T) n'est cote que depuis fin 2024. La base 100 neutralise le niveau de prix mais pas l'effet de change sur les lignes asiatiques et suisse. OMMIC (absorbe par MACOM) et UMS (non cote) sont exclus.</p>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+  var state={group:"all",off:{},series:[]};
+  var cv=document.getElementById("cv"),ctx=cv.getContext("2d");
+  var statusEl=document.getElementById("status"),legendEl=document.getElementById("legend");
+  var hover=null;
+
+  function load(){
+    statusEl.innerHTML="Chargement de data.json...";
+    fetch("./data.json?t="+Date.now()).then(function(r){
+      if(!r.ok) throw 0; return r.json();
+    }).then(function(j){
+      state.series=j.series||[];
+      var d=j.generated?new Date(j.generated):null;
+      var stamp=d?d.toLocaleString("fr-FR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"?";
+      statusEl.innerHTML=state.series.length+" valeurs · maj "+stamp;
+      buildLegend(); resize();
+    }).catch(function(){
+      statusEl.innerHTML="<span class='err'>data.json introuvable.</span> Lance le workflow GitHub Actions (onglet Actions > Run workflow) pour le generer.";
+    });
+  }
+
+  function visible(){
+    return state.series.filter(function(s){
+      if(!s.x||!s.x.length) return false;
+      if(state.off[s.tk]) return false;
+      if(state.group!=="all" && s.grp!==state.group) return false;
+      return true;
+    });
+  }
+
+  function buildLegend(){
+    var inG=state.series.filter(function(s){return state.group==="all"||s.grp===state.group;});
+    legendEl.innerHTML="";
+    inG.forEach(function(s){
+      var d=document.createElement("div");
+      d.className="lg"+(state.off[s.tk]?" off":"");
+      var pctTxt=(s.pct>=0?"+":"")+Number(s.pct).toFixed(1)+"%";
+      var cls=s.pct>0.05?"up":(s.pct<-0.05?"down":"flat");
+      d.innerHTML='<span class="swatch" style="background:'+s.col+';color:'+s.col+'"></span>'+
+        '<span class="nm">'+s.name+'<span class="tk">'+s.tk+'</span></span>'+
+        '<span class="pct '+cls+'">'+pctTxt+'</span>';
+      d.onclick=function(){state.off[s.tk]=!state.off[s.tk];buildLegend();draw();};
+      legendEl.appendChild(d);
+    });
+  }
+
+  var DPR=Math.max(1,Math.min(3,window.devicePixelRatio||1));
+  var PADL=44,PADR=14,PADT=14,PADB=26;
+
+  function resize(){
+    var cssW=cv.clientWidth||cv.parentNode.clientWidth-12;
+    var cssH=Math.max(280,Math.min(460,Math.round(cssW*0.56)));
+    cv.style.height=cssH+"px";
+    cv.width=Math.round(cssW*DPR);cv.height=Math.round(cssH*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);draw();
+  }
+
+  function bounds(vis){
+    var tmin=Infinity,tmax=-Infinity,vmin=Infinity,vmax=-Infinity;
+    vis.forEach(function(s){
+      for(var i=0;i<s.x.length;i++){
+        if(s.x[i]<tmin)tmin=s.x[i];if(s.x[i]>tmax)tmax=s.x[i];
+        if(s.y[i]<vmin)vmin=s.y[i];if(s.y[i]>vmax)vmax=s.y[i];
+      }
+    });
+    if(!isFinite(vmin)){vmin=90;vmax=110;}
+    var pad=(vmax-vmin)*0.08||5;return {tmin:tmin,tmax:tmax,vmin:vmin-pad,vmax:vmax+pad};
+  }
+
+  function draw(){
+    var cssW=cv.clientWidth,cssH=cv.clientHeight;
+    ctx.clearRect(0,0,cssW,cssH);
+    var vis=visible(),b=bounds(vis);
+    var plotW=cssW-PADL-PADR,plotH=cssH-PADT-PADB;
+    function X(t){return PADL+(t-b.tmin)/(b.tmax-b.tmin||1)*plotW;}
+    function Y(v){return PADT+(1-(v-b.vmin)/(b.vmax-b.vmin||1))*plotH;}
+
+    ctx.font="10px ui-monospace,monospace";ctx.textBaseline="middle";
+    var step=niceStep(b.vmin,b.vmax,5),start=Math.ceil(b.vmin/step)*step;
+    for(var v=start;v<=b.vmax;v+=step){
+      var y=Y(v),is100=Math.abs(v-100)<0.001;
+      ctx.strokeStyle=is100?"rgba(255,210,63,.32)":"rgba(94,234,212,.07)";ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(PADL,y);ctx.lineTo(cssW-PADR,y);ctx.stroke();
+      ctx.fillStyle=is100?"rgba(255,210,63,.7)":"#46555C";ctx.textAlign="right";
+      ctx.fillText(v.toFixed(0),PADL-8,y);
+    }
+    var months=monthTicks(b.tmin,b.tmax);
+    ctx.textAlign="center";ctx.textBaseline="top";
+    months.forEach(function(m){
+      var x=X(m.t);
+      ctx.strokeStyle="rgba(94,234,212,.06)";ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(x,PADT);ctx.lineTo(x,cssH-PADB);ctx.stroke();
+      ctx.fillStyle="#46555C";ctx.fillText(m.label,x,cssH-PADB+6);
+    });
+
+    vis.forEach(function(s){
+      ctx.beginPath();
+      for(var i=0;i<s.x.length;i++){
+        var x=X(s.x[i]),y=Y(s.y[i]);
+        if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+      }
+      ctx.lineJoin="round";ctx.strokeStyle=s.col;ctx.globalAlpha=0.9;
+      ctx.shadowColor=s.col;ctx.shadowBlur=s.hero?9:5;ctx.lineWidth=s.hero?2.4:1.3;
+      ctx.stroke();ctx.shadowBlur=0;ctx.globalAlpha=1;
+    });
+
+    if(hover!=null && vis.length){
+      var tx=b.tmin+(hover-PADL)/plotW*(b.tmax-b.tmin);
+      if(hover>=PADL && hover<=cssW-PADR){
+        ctx.strokeStyle="rgba(215,226,224,.22)";ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(hover,PADT);ctx.lineTo(hover,cssH-PADB);ctx.stroke();
+        var rows=[];
+        vis.forEach(function(s){
+          var bi=0,bd=Infinity;
+          for(var i=0;i<s.x.length;i++){var dd=Math.abs(s.x[i]-tx);if(dd<bd){bd=dd;bi=i;}}
+          var nv=s.y[bi];rows.push({s:s,nv:nv});
+          ctx.fillStyle=s.col;ctx.shadowColor=s.col;ctx.shadowBlur=6;
+          ctx.beginPath();ctx.arc(X(s.x[bi]),Y(nv),2.6,0,7);ctx.fill();ctx.shadowBlur=0;
+        });
+        rows.sort(function(a,c){return c.nv-a.nv;});
+        var dt=new Date(tx),lbl=("0"+dt.getDate()).slice(-2)+"/"+("0"+(dt.getMonth()+1)).slice(-2);
+        var bw=128,bx=hover>cssW/2?hover-bw-10:hover+10,by=PADT+4,bh=18+rows.length*15;
+        ctx.fillStyle="rgba(8,11,15,.92)";ctx.strokeStyle="rgba(94,234,212,.25)";
+        roundRect(bx,by,bw,bh,7);ctx.fill();ctx.stroke();
+        ctx.textAlign="left";ctx.textBaseline="top";
+        ctx.fillStyle="#6F8088";ctx.font="10px ui-monospace,monospace";ctx.fillText(lbl,bx+9,by+5);
+        rows.forEach(function(r,i){
+          var yy=by+18+i*15;
+          ctx.fillStyle=r.s.col;ctx.fillRect(bx+9,yy+3,7,7);
+          ctx.fillStyle="#D7E2E0";ctx.font="10px ui-monospace,monospace";ctx.fillText(r.s.tk,bx+22,yy);
+          ctx.textAlign="right";ctx.fillStyle=(r.nv>=100?"#54E0A0":"#FF7A8A");
+          ctx.fillText(r.nv.toFixed(1),bx+bw-9,yy);ctx.textAlign="left";
+        });
+      }
+    }
+  }
+
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();
+  }
+  function niceStep(min,max,n){
+    var raw=(max-min)/n,mag=Math.pow(10,Math.floor(Math.log(raw)/Math.LN10)),norm=raw/mag,step;
+    if(norm<1.5)step=1;else if(norm<3)step=2;else if(norm<7)step=5;else step=10;return step*mag;
+  }
+  function monthTicks(tmin,tmax){
+    var out=[],d=new Date(tmin);d.setDate(1);d.setHours(0,0,0,0);
+    var names=["jan","fev","mar","avr","mai","juin","juil","aout","sep","oct","nov","dec"];
+    while(d.getTime()<=tmax){
+      if(d.getTime()>=tmin)out.push({t:d.getTime(),label:names[d.getMonth()]});
+      d.setMonth(d.getMonth()+1);
+    }
+    return out;
+  }
+
+  function onMove(e){
+    var rect=cv.getBoundingClientRect();
+    var cx=(e.touches?e.touches[0].clientX:e.clientX)-rect.left;hover=cx;draw();
+  }
+  function onLeave(){hover=null;draw();}
+  cv.addEventListener("mousemove",onMove);
+  cv.addEventListener("mouseleave",onLeave);
+  cv.addEventListener("touchstart",onMove,{passive:true});
+  cv.addEventListener("touchmove",onMove,{passive:true});
+  cv.addEventListener("touchend",onLeave);
+
+  document.getElementById("groupSeg").addEventListener("click",function(e){
+    var btn=e.target.closest("button");if(!btn)return;
+    state.group=btn.getAttribute("data-g");
+    var bs=this.querySelectorAll("button");
+    for(var i=0;i<bs.length;i++)bs[i].classList.toggle("on",bs[i]===btn);
+    buildLegend();resize();
+  });
+  document.getElementById("refreshBtn").addEventListener("click",load);
+  window.addEventListener("resize",resize);
+
+  load();
+})();
+</script>
+</body>
+</html>
