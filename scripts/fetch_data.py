@@ -23,6 +23,7 @@ SERIES = [
     ("IFX.DE",    "Infineon",    "rf",  "#E36BE0", False),
     ("6981.T",    "Murata",      "rf",  "#C9D14B", False),
     ("AMS.SW",    "ams-OSRAM",   "rf",  "#5BD1E6", False),
+    ("6971.T",    "Kyocera",     "rf",  "#D2A679", False),
     ("MU",        "Micron",      "mem", "#FFD23F", True),
     ("005930.KS", "Samsung",     "mem", "#7AA5FF", False),
     ("000660.KS", "SK Hynix",    "mem", "#FF6FA5", False),
